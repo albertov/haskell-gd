@@ -5,6 +5,7 @@ module Graphics.GD (
                     -- * Creating and copying images
                     newImage, copyImage, 
                     copyRegion, copyRegionScaled,
+                    createPaletteFromTrueColor,
                     -- * Memory management
                     withImage,
                     -- * Loading images
@@ -18,7 +19,7 @@ module Graphics.GD (
                     -- ** JPEG
                     saveJpegFile, saveJpegByteString,
                     -- ** PNG
-                    savePngFile, savePngByteString,
+                    savePngFile, savePngByteString, savePngByteStringEx,
                     -- ** GIF
                     saveGifFile, saveGifByteString,
                     -- * Getting image information
@@ -112,6 +113,10 @@ foreign import ccall "gd.h gdImagePng" gdImagePng
 foreign import ccall "gd.h gdImagePngPtr" gdImagePngPtr
     :: Ptr GDImage -> Ptr CInt -> IO (Ptr a)
 
+foreign import ccall "gd.h gdImagePngPtrEx" gdImagePngPtrEx
+    :: Ptr GDImage -> Ptr CInt -> CInt -> IO (Ptr a)
+
+
 -- GIF format
 
 foreign import ccall "gd.h gdImageCreateFromGif" gdImageCreateFromGif
@@ -130,6 +135,9 @@ foreign import ccall "gd.h gdImageGifPtr" gdImageGifPtr
 
 foreign import ccall "gd.h gdImageCreateTrueColor" gdImageCreateTrueColor 
     :: CInt -> CInt -> IO (Ptr GDImage)
+
+foreign import ccall "gd.h gdImageCreatePaletteFromTrueColor" gdImageCreatePaletteFromTrueColor 
+    :: Ptr GDImage -> CInt -> CInt -> IO (Ptr GDImage)
 
 foreign import ccall "gd.h gdImageDestroy" gdImageDestroy
     :: Ptr GDImage -> IO ()
@@ -285,6 +293,14 @@ newImage_ w h = do p <- F.throwIfNull "gdImageCreateTrueColor" $
                         gdImageCreateTrueColor w h
                    mkImage p
 
+createPaletteFromTrueColor :: Bool -> Int -> Image -> IO Image
+createPaletteFromTrueColor dither colors im = withImagePtr im $ \imPtr -> do
+  let cDither = if dither then 1 else 0
+      cColors = fromIntegral colors
+  p <- F.throwIfNull "gdImageCreatePaletteFromTrueColor" $
+          gdImageCreatePaletteFromTrueColor imPtr cDither cColors
+  mkImage p
+
 -- | Create a new empty image and apply a function to it.
 onNewImage :: CInt -> CInt -> (Ptr GDImage -> IO a) -> IO Image
 onNewImage w h f = newImage_ w h >>= \i -> withImagePtr i f >> return i
@@ -410,6 +426,9 @@ savePngFile = saveImageFile gdImagePng
 savePngByteString :: Image -> IO B.ByteString
 savePngByteString = saveImageByteString gdImagePngPtr
 
+savePngByteStringEx :: Int -> Image -> IO B.ByteString
+savePngByteStringEx level = saveImageByteStringEx level gdImagePngPtrEx
+
 
 -- | Save an image as a GIF file.
 saveGifFile :: FilePath -> Image -> IO ()
@@ -427,9 +446,20 @@ saveImageByteString :: (Ptr GDImage -> Ptr CInt -> IO (Ptr a)) -> Image
                        -> IO (B.ByteString)
 saveImageByteString f img = withImagePtr img (\p -> dataByteString (f p))
 
+saveImageByteStringEx :: Int -> (Ptr GDImage -> Ptr CInt -> CInt -> IO (Ptr a))
+                      -> Image -> IO (B.ByteString)
+saveImageByteStringEx level f img
+  = withImagePtr img (\p -> dataByteStringEx level (f p))
+
 dataByteString :: (Ptr CInt -> IO (Ptr a)) -> IO B.ByteString
 dataByteString f = F.alloca $ \szPtr -> do
     datPtr <- f szPtr >>= F.newForeignPtr gdFree . F.castPtr
+    liftM (B.fromForeignPtr datPtr 0 . fromIntegral) (F.peek szPtr)
+
+dataByteStringEx :: Int -> (Ptr CInt -> CInt -> IO (Ptr a)) -> IO B.ByteString
+dataByteStringEx level f = F.alloca $ \szPtr -> do
+    let cLevel = fromIntegral level
+    datPtr <- f szPtr cLevel >>= F.newForeignPtr gdFree . F.castPtr
     liftM (B.fromForeignPtr datPtr 0 . fromIntegral) (F.peek szPtr)
                   
 --
